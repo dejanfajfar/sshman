@@ -23,3 +23,30 @@ lint-fix:
 
 # Auto-fix all (lint + format)
 fix: lint-fix format
+
+# Build pip package (wheel and sdist)
+build:
+	rm -rf dist/
+	uv run python -m build
+	@echo ""
+	@echo "Built packages:"
+	@ls -lh dist/
+
+# Show venv activation instructions
+[unix]
+venv:
+	@echo "Run: source .venv/bin/activate"
+	@echo "Or:  source \$(just _venv-path)"
+
+[windows]
+venv:
+	@echo "Run: .venv\\Scripts\\activate"
+
+# Output venv activate path (for scripting)
+[unix]
+_venv-path:
+	@echo ".venv/bin/activate"
+
+[windows]
+_venv-path:
+	@echo ".venv\\Scripts\\Activate.ps1"
