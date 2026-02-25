@@ -1,7 +1,6 @@
 """Main Textual TUI application for sshman."""
 
 import subprocess
-import sys
 
 from textual import on
 from textual.app import App, ComposeResult

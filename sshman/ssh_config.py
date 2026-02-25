@@ -1,5 +1,6 @@
 """SSH config file parser for importing existing connections."""
 
+import contextlib
 import re
 from pathlib import Path
 
@@ -81,10 +82,8 @@ def _dict_to_connection(data: dict[str, str]) -> Connection | None:
     # Parse port
     port = 22
     if "port" in data:
-        try:
+        with contextlib.suppress(ValueError):
             port = int(data["port"])
-        except ValueError:
-            pass
 
     # Expand ~ in identity file path
     identity_file = data.get("identityfile")
