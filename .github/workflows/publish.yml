@@ -70,6 +70,7 @@ jobs:
     environment: testpypi
     permissions:
       id-token: write
+      contents: read
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -81,6 +82,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          attestations: false
 
   publish-pypi:
     name: Publish to PyPI
@@ -90,6 +92,7 @@ jobs:
     environment: pypi
     permissions:
       id-token: write
+      contents: read
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -99,3 +102,5 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: false
