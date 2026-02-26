@@ -626,7 +626,6 @@ wheels = [
 
 [[package]]
 name = "sshmanager"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
