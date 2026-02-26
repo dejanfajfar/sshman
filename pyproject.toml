@@ -39,9 +39,6 @@ build-backend = "hatchling.build"
 [tool.hatch.version]
 source = "vcs"
 
-[tool.hatch.version.raw-options]
-version_scheme = "pep440"
-
 [tool.hatch.build.hooks.vcs]
 version-file = "sshman/_version.py"
 
