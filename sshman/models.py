@@ -18,6 +18,12 @@ class Connection(BaseModel):
         """Build the SSH command arguments for this connection."""
         cmd = ["ssh"]
 
+        # Add connection timeout to fail fast on unreachable hosts
+        cmd.extend(["-o", "ConnectTimeout=10"])
+        # Detect dead connections
+        cmd.extend(["-o", "ServerAliveInterval=5"])
+        cmd.extend(["-o", "ServerAliveCountMax=2"])
+
         if self.port != 22:
             cmd.extend(["-p", str(self.port)])
 
@@ -40,6 +46,30 @@ class Connection(BaseModel):
         if self.port != 22:
             target += f":{self.port}"
         return target
+
+
+class DockerContainer(BaseModel):
+    """Represents a running Docker container."""
+
+    container_id: str = Field(..., description="Container ID (short, 12 chars)")
+    name: str = Field(..., description="Container name")
+    image: str = Field(..., description="Image name with tag")
+    status: str = Field(..., description="Container status (e.g., 'Up 2 hours')")
+
+    def exec_command(self, shell: str = "/bin/sh") -> list[str]:
+        """Build docker exec command for this container.
+
+        Args:
+            shell: The shell to use inside the container.
+
+        Returns:
+            Command list like ["docker", "exec", "-it", "container", "/bin/sh"].
+        """
+        return ["docker", "exec", "-it", self.name, shell]
+
+    def display_target(self) -> str:
+        """Return the image name for display."""
+        return self.image
 
 
 class AppConfig(BaseModel):

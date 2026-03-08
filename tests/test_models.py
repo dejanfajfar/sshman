@@ -40,7 +40,16 @@ class TestConnection:
 
         cmd = conn.ssh_command()
 
-        assert cmd == ["ssh", "example.com"]
+        assert cmd == [
+            "ssh",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "ServerAliveInterval=5",
+            "-o",
+            "ServerAliveCountMax=2",
+            "example.com",
+        ]
 
     def test_ssh_command_with_user(self) -> None:
         """Test SSH command generation with user."""
@@ -48,7 +57,16 @@ class TestConnection:
 
         cmd = conn.ssh_command()
 
-        assert cmd == ["ssh", "root@example.com"]
+        assert cmd == [
+            "ssh",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "ServerAliveInterval=5",
+            "-o",
+            "ServerAliveCountMax=2",
+            "root@example.com",
+        ]
 
     def test_ssh_command_with_port(self) -> None:
         """Test SSH command generation with custom port."""
@@ -56,7 +74,18 @@ class TestConnection:
 
         cmd = conn.ssh_command()
 
-        assert cmd == ["ssh", "-p", "2222", "example.com"]
+        assert cmd == [
+            "ssh",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "ServerAliveInterval=5",
+            "-o",
+            "ServerAliveCountMax=2",
+            "-p",
+            "2222",
+            "example.com",
+        ]
 
     def test_ssh_command_with_identity_file(self) -> None:
         """Test SSH command generation with identity file."""
@@ -68,7 +97,18 @@ class TestConnection:
 
         cmd = conn.ssh_command()
 
-        assert cmd == ["ssh", "-i", "~/.ssh/mykey", "example.com"]
+        assert cmd == [
+            "ssh",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "ServerAliveInterval=5",
+            "-o",
+            "ServerAliveCountMax=2",
+            "-i",
+            "~/.ssh/mykey",
+            "example.com",
+        ]
 
     def test_ssh_command_full(self) -> None:
         """Test SSH command generation with all options."""
@@ -84,6 +124,12 @@ class TestConnection:
 
         assert cmd == [
             "ssh",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "ServerAliveInterval=5",
+            "-o",
+            "ServerAliveCountMax=2",
             "-p",
             "2222",
             "-i",

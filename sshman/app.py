@@ -18,7 +18,8 @@ from textual.widgets import (
     Static,
 )
 
-from .models import Connection
+from .docker import detect_shell, get_running_containers, is_docker_available
+from .models import Connection, DockerContainer
 from .ssh_config import parse_ssh_config
 from .storage import (
     add_connection,
@@ -396,15 +397,20 @@ class SSHManApp(App):
         Binding("e", "edit_connection", "Edit"),
         Binding("d", "delete_connection", "Delete"),
         Binding("i", "import_config", "Import"),
+        Binding("r", "refresh_all", "Refresh"),
         Binding("enter", "connect", "Connect"),
         Binding("/", "focus_search", "Search"),
         Binding("escape", "clear_search", "Clear Search"),
     ]
 
-    def __init__(self) -> None:
+    def __init__(self, error_message: str | None = None) -> None:
         super().__init__()
         self.connections: list[Connection] = []
         self.filtered_connections: list[Connection] = []
+        self.docker_containers: list[DockerContainer] = []
+        self.filtered_docker: list[DockerContainer] = []
+        self.docker_available: bool = False
+        self.startup_error_message: str | None = error_message
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -422,15 +428,34 @@ class SSHManApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.refresh_connections()
+        self.refresh_all()
+        if self.startup_error_message:
+            self.notify(self.startup_error_message, severity="error", timeout=5)
+
+    def action_refresh_all(self) -> None:
+        """Action handler for the refresh keybinding."""
+        self.refresh_all()
+        self.notify("Refreshed connections and containers")
+
+    def refresh_all(self) -> None:
+        """Reload SSH connections and Docker containers."""
+        self.connections = get_connections()
+        self.docker_available = is_docker_available()
+        self.docker_containers = (
+            get_running_containers() if self.docker_available else []
+        )
+        self.filter_all()
 
     def refresh_connections(self) -> None:
         """Reload connections from storage and update the table."""
-        self.connections = get_connections()
-        self.filter_connections()
+        self.refresh_all()
 
     def filter_connections(self, search: str = "") -> None:
         """Filter connections based on search term."""
+        self.filter_all(search)
+
+    def filter_all(self, search: str = "") -> None:
+        """Filter both SSH connections and Docker containers based on search term."""
         search = search.lower().strip()
 
         if search:
@@ -441,22 +466,30 @@ class SSHManApp(App):
                 or search in c.hostname.lower()
                 or (c.user and search in c.user.lower())
             ]
+            self.filtered_docker = [
+                d
+                for d in self.docker_containers
+                if search in d.name.lower() or search in d.image.lower()
+            ]
         else:
             self.filtered_connections = self.connections.copy()
+            self.filtered_docker = self.docker_containers.copy()
 
         self.update_table()
 
     def update_table(self) -> None:
-        """Update the DataTable with current filtered connections."""
+        """Update the DataTable with current filtered connections and containers."""
         table = self.query_one("#connections-table", DataTable)
         empty_msg = self.query_one("#empty-message", Static)
 
         table.clear(columns=True)
 
-        if not self.filtered_connections:
+        total_items = len(self.filtered_connections) + len(self.filtered_docker)
+
+        if total_items == 0:
             table.display = False
             empty_msg.display = True
-            if self.connections:
+            if self.connections or self.docker_containers:
                 empty_msg.update("No connections match your search.")
             else:
                 empty_msg.update(
@@ -467,18 +500,37 @@ class SSHManApp(App):
         table.display = True
         empty_msg.display = False
 
-        table.add_columns("Name", "Target", "Identity File")
+        table.add_columns("Name", "Target", "Type", "Info")
 
+        # Add SSH connections
         for conn in self.filtered_connections:
+            idx = self.connections.index(conn)
             table.add_row(
                 conn.name,
                 conn.display_target(),
+                "🔐 SSH",
                 conn.identity_file or "-",
+                key=f"ssh:{idx}",
+            )
+
+        # Add Docker containers
+        for container in self.filtered_docker:
+            table.add_row(
+                container.name,
+                container.image,
+                "🐳 Docker",
+                container.container_id,
+                key=f"docker:{container.container_id}",
             )
 
     @on(Input.Changed, "#search-input")
     def on_search_changed(self, event: Input.Changed) -> None:
         self.filter_connections(event.value)
+
+    @on(DataTable.RowSelected, "#connections-table")
+    def on_row_selected(self, event: DataTable.RowSelected) -> None:  # noqa: ARG002
+        """Handle Enter key press on a table row to start connection."""
+        self.action_connect()
 
     def action_focus_search(self) -> None:
         self.query_one("#search-input", Input).focus()
@@ -489,23 +541,40 @@ class SSHManApp(App):
         self.filter_connections("")
         self.query_one("#connections-table", DataTable).focus()
 
-    def get_selected_connection_index(self) -> int | None:
-        """Get the index of the currently selected connection in the main list."""
+    def get_selected_row_key(self) -> str | None:
+        """Get the row key of the currently selected row."""
         table = self.query_one("#connections-table", DataTable)
 
-        if not self.filtered_connections:
+        total_items = len(self.filtered_connections) + len(self.filtered_docker)
+        if total_items == 0:
             return None
 
         try:
             row_idx = table.cursor_row
-            if row_idx < 0 or row_idx >= len(self.filtered_connections):
+            if row_idx < 0 or row_idx >= total_items:
                 return None
 
-            # Find the index in the main connections list
-            selected_conn = self.filtered_connections[row_idx]
-            return self.connections.index(selected_conn)
-        except (ValueError, IndexError):
+            # Use the cursor coordinate to get the row key
+            return str(
+                table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+            )
+        except (ValueError, IndexError, AttributeError):
             return None
+
+    def get_selected_connection_index(self) -> int | None:
+        """Get the index of the currently selected connection in the main list."""
+        row_key = self.get_selected_row_key()
+        if row_key is None:
+            return None
+
+        if row_key.startswith("ssh:"):
+            try:
+                return int(row_key.split(":")[1])
+            except (ValueError, IndexError):
+                return None
+
+        # If it's a Docker row, return None (not an SSH connection)
+        return None
 
     def action_add_connection(self) -> None:
         def handle_result(connection: Connection | None) -> None:
@@ -517,6 +586,15 @@ class SSHManApp(App):
         self.push_screen(ConnectionFormScreen(), handle_result)
 
     def action_edit_connection(self) -> None:
+        row_key = self.get_selected_row_key()
+        if row_key is None:
+            self.notify("No connection selected", severity="warning")
+            return
+
+        if row_key.startswith("docker:"):
+            self.notify("Cannot edit Docker containers", severity="warning")
+            return
+
         idx = self.get_selected_connection_index()
         if idx is None:
             self.notify("No connection selected", severity="warning")
@@ -533,6 +611,15 @@ class SSHManApp(App):
         self.push_screen(ConnectionFormScreen(conn), handle_result)
 
     def action_delete_connection(self) -> None:
+        row_key = self.get_selected_row_key()
+        if row_key is None:
+            self.notify("No connection selected", severity="warning")
+            return
+
+        if row_key.startswith("docker:"):
+            self.notify("Cannot delete Docker containers from here", severity="warning")
+            return
+
         idx = self.get_selected_connection_index()
         if idx is None:
             self.notify("No connection selected", severity="warning")
@@ -568,26 +655,57 @@ class SSHManApp(App):
         self.push_screen(ImportScreen(), handle_result)
 
     def action_connect(self) -> None:
-        idx = self.get_selected_connection_index()
-        if idx is None:
+        row_key = self.get_selected_row_key()
+        if row_key is None:
             self.notify("No connection selected", severity="warning")
             return
 
-        conn = self.connections[idx]
-        ssh_cmd = conn.ssh_command()
+        if row_key.startswith("ssh:"):
+            try:
+                idx = int(row_key.split(":")[1])
+                conn = self.connections[idx]
+                ssh_cmd = conn.ssh_command()
+                self.exit(result=ssh_cmd)
+            except (ValueError, IndexError):
+                self.notify("Invalid selection", severity="error")
 
-        # Exit the TUI and run SSH
-        self.exit(result=ssh_cmd)
+        elif row_key.startswith("docker:"):
+            container_id = row_key.split(":", 1)[1]
+            container = next(
+                (c for c in self.docker_containers if c.container_id == container_id),
+                None,
+            )
+            if container:
+                shell = detect_shell(container.container_id)
+                docker_cmd = container.exec_command(shell)
+                self.exit(result=docker_cmd)
+            else:
+                self.notify("Container not found", severity="error")
 
 
 def run() -> None:
     """Run the sshman application."""
-    app = SSHManApp()
-    result = app.run()
+    error_message: str | None = None
 
-    # If user selected a connection, run SSH
-    if result:
-        subprocess.run(result)
+    while True:
+        app = SSHManApp(error_message=error_message)
+        result = app.run()
+        error_message = None  # Clear for next iteration
+
+        # If user quit without selecting a connection, exit
+        if not result:
+            break
+
+        # Run the connection command
+        cmd_result = subprocess.run(result)
+
+        # If connection failed, restart app with error message
+        if cmd_result.returncode != 0:
+            cmd_str = " ".join(result)
+            error_message = f"Connection failed: {cmd_str}"
+        else:
+            # Successful connection that ended normally, restart app
+            continue
 
 
 if __name__ == "__main__":
