@@ -1,5 +1,5 @@
 [project]
-name = "sshmanager"
+name = "clisshmanager"
 dynamic = ["version"]
 description = "A simple interactive TUI SSH connection manager"
 readme = "README.md"
