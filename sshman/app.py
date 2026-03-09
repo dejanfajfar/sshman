@@ -1,6 +1,7 @@
 """Main Textual TUI application for sshman."""
 
 import subprocess
+from datetime import datetime
 
 from textual import on
 from textual.app import App, ComposeResult
@@ -16,15 +17,19 @@ from textual.widgets import (
     Input,
     Label,
     Static,
+    TabbedContent,
+    TabPane,
 )
 
 from .docker import detect_shell, get_running_containers, is_docker_available
-from .models import Connection, DockerContainer
+from .models import Connection, DockerContainer, HistoryEntry
 from .ssh_config import parse_ssh_config
 from .storage import (
     add_connection,
+    add_history_entry,
     delete_connection,
     get_connections,
+    get_history_entries,
     load_config,
     save_config,
     update_connection,
@@ -389,7 +394,15 @@ class SSHManApp(App):
         width: 100%;
     }
     
+    #history-search-input {
+        width: 100%;
+    }
+    
     #connections-table {
+        height: 1fr;
+    }
+    
+    #history-table {
         height: 1fr;
     }
     
@@ -399,18 +412,32 @@ class SSHManApp(App):
         content-align: center middle;
         color: $text-muted;
     }
+    
+    #history-empty-message {
+        width: 100%;
+        height: 100%;
+        content-align: center middle;
+        color: $text-muted;
+    }
+    
+    TabPane {
+        padding: 0;
+    }
     """
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
-        Binding("a", "add_connection", "Add"),
-        Binding("e", "edit_connection", "Edit"),
-        Binding("d", "delete_connection", "Delete"),
+        Binding("a", "add_connection", "Add", show=True),
+        Binding("e", "edit_connection", "Edit", show=True),
+        Binding("d", "delete_connection", "Delete", show=True),
         Binding("i", "import_config", "Import"),
         Binding("r", "refresh_all", "Refresh"),
         Binding("enter", "connect", "Connect"),
         Binding("/", "focus_search", "Search"),
-        Binding("escape", "clear_search", "Clear Search"),
+        Binding("escape", "clear_search", "Clear"),
+        Binding("tab", "next_tab", "Next Tab", show=False),
+        Binding("1", "show_connections", "Connections", show=True),
+        Binding("2", "show_history", "History", show=True),
     ]
 
     def __init__(self, error_message: str | None = None) -> None:
@@ -421,30 +448,54 @@ class SSHManApp(App):
         self.filtered_docker: list[DockerContainer] = []
         self.docker_available: bool = False
         self.startup_error_message: str | None = error_message
+        # History tracking
+        self.history_entries: list[HistoryEntry] = []
+        self.filtered_history: list[HistoryEntry] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
 
-        with Vertical(id="main-container"):
-            with Container(id="search-container"):
-                yield Input(placeholder="Search connections...", id="search-input")
+        with TabbedContent(id="tabs"):
+            with TabPane("Connections", id="tab-connections"):
+                with Vertical(id="main-container"):
+                    with Container(id="search-container"):
+                        yield Input(
+                            placeholder="Search connections...", id="search-input"
+                        )
 
-            yield DataTable(id="connections-table", cursor_type="row")
-            yield Static(
-                "No connections yet. Press 'a' to add or 'i' to import.",
-                id="empty-message",
-            )
+                    yield DataTable(id="connections-table", cursor_type="row")
+                    yield Static(
+                        "No connections yet. Press 'a' to add or 'i' to import.",
+                        id="empty-message",
+                    )
+
+            with TabPane("History", id="tab-history"):
+                with Vertical(id="history-container"):
+                    with Container(id="search-container"):
+                        yield Input(
+                            placeholder="Search history...", id="history-search-input"
+                        )
+
+                    yield DataTable(id="history-table", cursor_type="row")
+                    yield Static(
+                        "No connection history yet.",
+                        id="history-empty-message",
+                    )
 
         yield Footer()
 
     def on_mount(self) -> None:
         self.refresh_all()
+        self.load_history()
+        # Focus the search input on startup
+        self.query_one("#search-input", Input).focus()
         if self.startup_error_message:
             self.notify(self.startup_error_message, severity="error", timeout=5)
 
     def action_refresh_all(self) -> None:
         """Action handler for the refresh keybinding."""
         self.refresh_all()
+        self.load_history()
         self.notify("Refreshed connections and containers")
 
     def refresh_all(self) -> None:
@@ -459,6 +510,88 @@ class SSHManApp(App):
     def refresh_connections(self) -> None:
         """Reload connections from storage and update the table."""
         self.refresh_all()
+
+    # --- Tab navigation methods ---
+
+    def action_next_tab(self) -> None:
+        """Switch to the next tab."""
+        tabs = self.query_one("#tabs", TabbedContent)
+        if tabs.active == "tab-connections":
+            tabs.active = "tab-history"
+            self.query_one("#history-table", DataTable).focus()
+        else:
+            tabs.active = "tab-connections"
+            self.query_one("#connections-table", DataTable).focus()
+
+    def action_show_connections(self) -> None:
+        """Switch to the Connections tab."""
+        tabs = self.query_one("#tabs", TabbedContent)
+        tabs.active = "tab-connections"
+        # Focus the connections table
+        self.query_one("#connections-table", DataTable).focus()
+
+    def action_show_history(self) -> None:
+        """Switch to the History tab."""
+        tabs = self.query_one("#tabs", TabbedContent)
+        tabs.active = "tab-history"
+        # Focus the history table
+        self.query_one("#history-table", DataTable).focus()
+
+    # --- History methods ---
+
+    def load_history(self) -> None:
+        """Load history entries from storage."""
+        self.history_entries = get_history_entries()
+        self.filtered_history = self.history_entries.copy()
+        self.update_history_table()
+
+    def filter_history(self, search: str = "") -> None:
+        """Filter history entries based on search term."""
+        search = search.lower().strip()
+
+        if search:
+            self.filtered_history = [
+                h
+                for h in self.history_entries
+                if search in h.connection_name.lower()
+                or search in h.connection_target.lower()
+            ]
+        else:
+            self.filtered_history = self.history_entries.copy()
+
+        self.update_history_table()
+
+    def update_history_table(self) -> None:
+        """Update the history DataTable with current filtered entries."""
+        table = self.query_one("#history-table", DataTable)
+        empty_msg = self.query_one("#history-empty-message", Static)
+
+        table.clear(columns=True)
+
+        if len(self.filtered_history) == 0:
+            table.display = False
+            empty_msg.display = True
+            return
+
+        table.display = True
+        empty_msg.display = False
+
+        table.add_columns("Name", "Target", "Started At", "Duration", "Status")
+
+        for idx, entry in enumerate(self.filtered_history):
+            table.add_row(
+                entry.connection_name,
+                entry.connection_target,
+                entry.format_started_at(),
+                entry.format_duration(),
+                entry.format_status(),
+                key=f"history:{idx}",
+            )
+
+    @on(Input.Changed, "#history-search-input")
+    def on_history_search_changed(self, event: Input.Changed) -> None:
+        """Handle search input changes in history tab."""
+        self.filter_history(event.value)
 
     def filter_connections(self, search: str = "") -> None:
         """Filter connections based on search term."""
@@ -550,13 +683,26 @@ class SSHManApp(App):
         self.action_connect()
 
     def action_focus_search(self) -> None:
-        self.query_one("#search-input", Input).focus()
+        """Focus the search input in the active tab."""
+        tabs = self.query_one("#tabs", TabbedContent)
+        if tabs.active == "tab-history":
+            self.query_one("#history-search-input", Input).focus()
+        else:
+            self.query_one("#search-input", Input).focus()
 
     def action_clear_search(self) -> None:
-        search_input = self.query_one("#search-input", Input)
-        search_input.value = ""
-        self.filter_connections("")
-        self.query_one("#connections-table", DataTable).focus()
+        """Clear search and focus table in the active tab."""
+        tabs = self.query_one("#tabs", TabbedContent)
+        if tabs.active == "tab-history":
+            search_input = self.query_one("#history-search-input", Input)
+            search_input.value = ""
+            self.filter_history("")
+            self.query_one("#history-table", DataTable).focus()
+        else:
+            search_input = self.query_one("#search-input", Input)
+            search_input.value = ""
+            self.filter_connections("")
+            self.query_one("#connections-table", DataTable).focus()
 
     def get_selected_row_key(self) -> str | None:
         """Get the row key of the currently selected row."""
@@ -682,7 +828,15 @@ class SSHManApp(App):
                 idx = int(row_key.split(":")[1])
                 conn = self.connections[idx]
                 ssh_cmd = conn.ssh_command()
-                self.exit(result=ssh_cmd)
+                # Return dict with command and metadata for history tracking
+                self.exit(
+                    result={
+                        "cmd": ssh_cmd,
+                        "name": conn.name,
+                        "target": conn.display_target(),
+                        "type": "ssh",
+                    }
+                )
             except (ValueError, IndexError):
                 self.notify("Invalid selection", severity="error")
 
@@ -695,7 +849,15 @@ class SSHManApp(App):
             if container:
                 shell = detect_shell(container.container_id)
                 docker_cmd = container.exec_command(shell)
-                self.exit(result=docker_cmd)
+                # Return dict with command and metadata for history tracking
+                self.exit(
+                    result={
+                        "cmd": docker_cmd,
+                        "name": container.name,
+                        "target": container.display_target(),
+                        "type": "docker",
+                    }
+                )
             else:
                 self.notify("Container not found", severity="error")
 
@@ -713,16 +875,58 @@ def run() -> None:
         if not result:
             break
 
+        # Extract command and metadata from result dict
+        cmd = result["cmd"]
+        connection_name = result["name"]
+        connection_target = result["target"]
+        connection_type = result["type"]
+
+        # Record start time
+        start_time = datetime.now()
+
         # Run the connection command
-        cmd_result = subprocess.run(result)
+        cmd_result = subprocess.run(cmd)
+
+        # Record end time and calculate duration
+        end_time = datetime.now()
+        duration_seconds = (end_time - start_time).total_seconds()
+
+        # Determine success and error message
+        success = cmd_result.returncode == 0
+        error_msg = None
+        if not success:
+            # Map common SSH exit codes to human-readable messages
+            exit_code = cmd_result.returncode
+            error_messages = {
+                1: "General error",
+                2: "Misuse of shell command",
+                126: "Command not executable",
+                127: "Command not found",
+                128: "Invalid exit argument",
+                130: "Terminated by Ctrl+C",
+                255: "Connection failed (network error, auth failure, or timeout)",
+            }
+            error_msg = error_messages.get(exit_code, f"Exit code: {exit_code}")
+
+        # Create and save history entry
+        entry = HistoryEntry(
+            connection_name=connection_name,
+            connection_target=connection_target,
+            connection_type=connection_type,
+            started_at=start_time,
+            ended_at=end_time,
+            duration_seconds=duration_seconds,
+            exit_code=cmd_result.returncode,
+            success=success,
+            error_message=error_msg,
+        )
+        add_history_entry(entry)
 
         # If connection failed, restart app with error message
-        if cmd_result.returncode != 0:
-            cmd_str = " ".join(result)
+        if not success:
+            cmd_str = " ".join(cmd)
             error_message = f"Connection failed: {cmd_str}"
-        else:
-            # Successful connection that ended normally, restart app
-            continue
+        # Continue loop to restart app after connection ends
 
 
 if __name__ == "__main__":

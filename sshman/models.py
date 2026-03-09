@@ -1,5 +1,7 @@
 """Data models for SSH connections."""
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -81,4 +83,56 @@ class AppConfig(BaseModel):
     version: str = Field(default="1.0", description="Config file version")
     connections: list[Connection] = Field(
         default_factory=list, description="List of saved connections"
+    )
+
+
+class HistoryEntry(BaseModel):
+    """Represents a connection history entry."""
+
+    connection_name: str = Field(..., description="Name of the connection")
+    connection_target: str = Field(..., description="Target (user@host:port)")
+    connection_type: str = Field(default="ssh", description="Type: 'ssh' or 'docker'")
+    started_at: datetime = Field(..., description="When connection was initiated")
+    ended_at: datetime | None = Field(default=None, description="When connection ended")
+    duration_seconds: float | None = Field(
+        default=None, description="Session duration in seconds"
+    )
+    exit_code: int | None = Field(default=None, description="Process exit code")
+    success: bool = Field(
+        default=False, description="Whether connection was successful"
+    )
+    error_message: str | None = Field(
+        default=None, description="Error details if failed"
+    )
+
+    def format_duration(self) -> str:
+        """Format duration as HH:MM:SS or '-' if not available."""
+        if self.duration_seconds is None:
+            return "-"
+        total_seconds = int(self.duration_seconds)
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def format_started_at(self) -> str:
+        """Format start time for display."""
+        return self.started_at.strftime("%b %d, %H:%M")
+
+    def format_status(self) -> str:
+        """Format status for display."""
+        if self.success:
+            return "✓"
+        if self.exit_code is not None:
+            return f"✗ ({self.exit_code})"
+        return "✗"
+
+
+class HistoryConfig(BaseModel):
+    """History stored in history.json."""
+
+    version: str = Field(default="1.0", description="History file version")
+    entries: list[HistoryEntry] = Field(
+        default_factory=list, description="List of history entries"
     )

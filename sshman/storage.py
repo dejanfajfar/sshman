@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from .models import AppConfig, Connection
+from .models import AppConfig, Connection, HistoryConfig, HistoryEntry
 
 
 def get_config_dir() -> Path:
@@ -68,3 +68,48 @@ def delete_connection(index: int) -> None:
 def get_connections() -> list[Connection]:
     """Get all saved connections."""
     return load_config().connections
+
+
+# --- History storage functions ---
+
+
+def get_history_path() -> Path:
+    """Get the path to the history.json file."""
+    return get_config_dir() / "history.json"
+
+
+def load_history() -> HistoryConfig:
+    """Load the history config from disk, or return default if not exists."""
+    history_path = get_history_path()
+
+    if not history_path.exists():
+        return HistoryConfig()
+
+    try:
+        data = json.loads(history_path.read_text(encoding="utf-8"))
+        return HistoryConfig.model_validate(data)
+    except (json.JSONDecodeError, ValueError):
+        # If history is corrupted, return default
+        return HistoryConfig()
+
+
+def save_history(config: HistoryConfig) -> None:
+    """Save the history config to disk."""
+    history_path = get_history_path()
+    history_path.write_text(
+        config.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+
+def add_history_entry(entry: HistoryEntry) -> None:
+    """Add a new history entry to storage."""
+    config = load_history()
+    # Add new entry at the beginning (most recent first)
+    config.entries.insert(0, entry)
+    save_history(config)
+
+
+def get_history_entries() -> list[HistoryEntry]:
+    """Get all history entries (most recent first)."""
+    return load_history().entries
