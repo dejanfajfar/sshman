@@ -13,6 +13,9 @@ class Connection(BaseModel):
     identity_file: str | None = Field(
         default=None, description="Path to private key file"
     )
+    description: str | None = Field(
+        default=None, description="Optional description or notes"
+    )
 
     def ssh_command(self) -> list[str]:
         """Build the SSH command arguments for this connection."""

@@ -184,6 +184,14 @@ class ConnectionFormScreen(ModalScreen[Connection | None]):
                     id="input-identity",
                 )
 
+            with Horizontal(classes="form-row"):
+                yield Label("Description:")
+                yield Input(
+                    value=conn.description or "" if conn else "",
+                    placeholder="e.g., Production web server",
+                    id="input-description",
+                )
+
             with Horizontal(id="form-buttons"):
                 yield Button("Save", variant="primary", id="btn-save")
                 yield Button("Cancel", variant="default", id="btn-cancel")
@@ -195,6 +203,7 @@ class ConnectionFormScreen(ModalScreen[Connection | None]):
         user = self.query_one("#input-user", Input).value.strip() or None
         port_str = self.query_one("#input-port", Input).value.strip()
         identity = self.query_one("#input-identity", Input).value.strip() or None
+        description = self.query_one("#input-description", Input).value.strip() or None
 
         # Validation
         if not name or not hostname:
@@ -215,6 +224,7 @@ class ConnectionFormScreen(ModalScreen[Connection | None]):
             user=user,
             port=port,
             identity_file=identity,
+            description=description,
         )
         self.dismiss(connection)
 
@@ -505,11 +515,18 @@ class SSHManApp(App):
         # Add SSH connections
         for conn in self.filtered_connections:
             idx = self.connections.index(conn)
+            # Build info string: "description [identity_file]" or just one or "-"
+            info_parts = []
+            if conn.description:
+                info_parts.append(conn.description)
+            if conn.identity_file:
+                info_parts.append(f"[{conn.identity_file}]")
+            info_str = " ".join(info_parts) if info_parts else "-"
             table.add_row(
                 conn.name,
                 conn.display_target(),
                 "🔐 SSH",
-                conn.identity_file or "-",
+                info_str,
                 key=f"ssh:{idx}",
             )
 
