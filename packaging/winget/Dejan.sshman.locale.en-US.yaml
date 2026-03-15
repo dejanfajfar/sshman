@@ -1,0 +1,24 @@
+PackageIdentifier: Dejan.sshman
+PackageVersion: 0.0.0
+PackageLocale: en-US
+Publisher: Dejan
+PublisherUrl: https://github.com/dejan
+PackageName: sshman
+PackageUrl: https://github.com/dejan/sshman
+License: MIT
+LicenseUrl: https://github.com/dejan/sshman/blob/main/LICENSE
+ShortDescription: A simple interactive TUI SSH connection manager
+Description: |-
+  sshman is an interactive terminal UI for managing SSH connections and Docker
+  containers. Navigate saved hosts with your keyboard, connect with Enter, search
+  with /, import from ~/.ssh/config, and review your connection history — all
+  without leaving the terminal.
+Tags:
+  - ssh
+  - terminal
+  - tui
+  - cli
+  - connection-manager
+  - docker
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

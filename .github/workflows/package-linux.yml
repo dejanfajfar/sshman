@@ -1,0 +1,131 @@
+name: Package Linux
+
+on:
+  workflow_run:
+    workflows: ["Publish to PyPI"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to package (e.g. 0.4.0)"
+        required: true
+        type: string
+
+jobs:
+  package-linux:
+    name: Build ${{ matrix.pkg }} package
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pkg: deb
+            target: debian
+            fpm_type: deb
+          - pkg: rpm
+            target: fedora
+            fpm_type: rpm
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            # Find the tag pointing at the commit that triggered the upstream workflow
+            git fetch --tags --quiet
+            SHA="${{ github.event.workflow_run.head_sha }}"
+            TAG=$(git tag --points-at "${SHA}" | grep '^v' | head -n1)
+            if [ -z "${TAG}" ]; then
+              echo "No version tag found for SHA ${SHA}" >&2
+              exit 1
+            fi
+            VERSION="${TAG#v}"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ruby (for fpm)
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install fpm
+        run: gem install fpm
+
+      - name: Install rpm tools (needed by fpm for .rpm)
+        if: matrix.fpm_type == 'rpm'
+        run: sudo apt-get install -y rpm
+
+      - name: Download wheel from PyPI
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          pip download \
+            --no-deps \
+            --dest ./dist \
+            "clisshmanager==${VERSION}"
+
+      - name: Install wheel and dependencies into staging prefix
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          STAGING="$(pwd)/staging"
+          INSTALL_DIR="${STAGING}/opt/sshman"
+          mkdir -p "${INSTALL_DIR}"
+
+          python -m venv "${INSTALL_DIR}/venv"
+          "${INSTALL_DIR}/venv/bin/pip" install --upgrade pip
+          "${INSTALL_DIR}/venv/bin/pip" install "clisshmanager==${VERSION}"
+
+          # Create a wrapper script at /usr/local/bin/sshman
+          BIN_DIR="${STAGING}/usr/local/bin"
+          mkdir -p "${BIN_DIR}"
+          printf '#!/bin/sh\nexec /opt/sshman/venv/bin/python /opt/sshman/venv/bin/sshman "$@"\n' \
+            > "${BIN_DIR}/sshman"
+          chmod +x "${BIN_DIR}/sshman"
+
+      - name: Build ${{ matrix.pkg }} package
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          STAGING="$(pwd)/staging"
+
+          fpm \
+            --input-type dir \
+            --output-type ${{ matrix.fpm_type }} \
+            --name sshman \
+            --version "${VERSION}" \
+            --architecture all \
+            --maintainer "Dejan <dejan@dejan.dev>" \
+            --description "A simple interactive TUI SSH connection manager" \
+            --url "https://github.com/dejan/sshman" \
+            --license MIT \
+            --depends "python3 >= 3.12" \
+            --chdir "${STAGING}" \
+            .
+
+      - name: Upload package as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sshman-${{ matrix.pkg }}
+          path: "sshman_*.${{ matrix.pkg }}"
+          if-no-files-found: error
+
+      - name: Upload package to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.version.outputs.version }}"
+          files: "sshman_*.${{ matrix.pkg }}"
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

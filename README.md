@@ -11,9 +11,11 @@ A simple interactive TUI SSH connection manager built with [Textual](https://tex
 - **Add/edit/delete** - Manage connections directly in the app
 - **Docker integration** - Auto-detects running containers and connects via `docker exec`
 - **Connection history** - Track past sessions with duration and status
-- **Cross-platform** - Works on macOS and Linux
+- **Cross-platform** - Works on macOS, Linux, and Windows
 
 ## Installation
+
+**PyPI** (macOS, Linux, Windows):
 
 ```bash
 pip install clisshmanager
@@ -23,6 +25,30 @@ Or with [uv](https://github.com/astral-sh/uv):
 
 ```bash
 uv tool install clisshmanager
+```
+
+**Windows** — download the standalone `.exe` (no Python required) from the
+[GitHub Releases](https://github.com/dejan/sshman/releases) page and place it
+somewhere on your `PATH`.
+
+**Debian / Ubuntu** — download the `.deb` from
+[GitHub Releases](https://github.com/dejan/sshman/releases):
+
+```bash
+sudo dpkg -i sshman_*.deb
+```
+
+**Fedora / RHEL / openSUSE** — download the `.rpm` from
+[GitHub Releases](https://github.com/dejan/sshman/releases):
+
+```bash
+sudo rpm -i sshman_*.rpm
+```
+
+**winget** (Windows Package Manager):
+
+```powershell
+winget install Dejan.sshman
 ```
 
 ## Usage

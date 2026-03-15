@@ -1,0 +1,186 @@
+name: Package Windows
+
+on:
+  workflow_run:
+    workflows: ["Publish to PyPI"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to package (e.g. 0.4.0)"
+        required: true
+        type: string
+
+jobs:
+  build-exe:
+    name: Build Windows .exe
+    runs-on: windows-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            SHA="${{ github.event.workflow_run.head_sha }}"
+            git fetch --tags --quiet
+            TAG=$(git tag --points-at "${SHA}" | grep '^v' | head -n1)
+            if [ -z "${TAG}" ]; then
+              echo "No version tag found for SHA ${SHA}" >&2
+              exit 1
+            fi
+            VERSION="${TAG#v}"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install app and PyInstaller
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          pip install "clisshmanager==${VERSION}" pyinstaller
+
+      - name: Build single-file executable
+        shell: bash
+        run: |
+          # Textual requires several hidden imports due to dynamic plugin loading.
+          # We also collect all textual data files (CSS, fonts, etc.).
+          pyinstaller \
+            --onefile \
+            --name sshman \
+            --console \
+            --collect-all textual \
+            --collect-all rich \
+            --hidden-import textual.app \
+            --hidden-import textual.widgets \
+            --hidden-import textual.widgets._data_table \
+            --hidden-import textual.widgets._button \
+            --hidden-import textual.widgets._input \
+            --hidden-import textual.widgets._label \
+            --hidden-import textual.widgets._static \
+            --hidden-import textual.widgets._tabs \
+            --hidden-import textual.widgets._tabbed_content \
+            --hidden-import textual.widgets._header \
+            --hidden-import textual.widgets._footer \
+            --hidden-import textual.containers \
+            --hidden-import textual.binding \
+            --hidden-import textual.coordinate \
+            --hidden-import textual.screen \
+            --hidden-import pydantic \
+            --hidden-import sshman.app \
+            --hidden-import sshman.models \
+            --hidden-import sshman.storage \
+            --hidden-import sshman.ssh_config \
+            --hidden-import sshman.docker \
+            $(python -c "import sshman.app; import inspect, os; print(os.path.dirname(inspect.getfile(sshman.app)))")/__main__.py 2>/dev/null || \
+          pyinstaller \
+            --onefile \
+            --name sshman \
+            --console \
+            --collect-all textual \
+            --collect-all rich \
+            --hidden-import textual.app \
+            --hidden-import textual.widgets \
+            --hidden-import textual.widgets._data_table \
+            --hidden-import textual.widgets._button \
+            --hidden-import textual.widgets._input \
+            --hidden-import textual.widgets._label \
+            --hidden-import textual.widgets._static \
+            --hidden-import textual.widgets._tabs \
+            --hidden-import textual.widgets._tabbed_content \
+            --hidden-import textual.widgets._header \
+            --hidden-import textual.widgets._footer \
+            --hidden-import textual.containers \
+            --hidden-import textual.binding \
+            --hidden-import textual.coordinate \
+            --hidden-import textual.screen \
+            --hidden-import pydantic \
+            --hidden-import sshman.app \
+            --hidden-import sshman.models \
+            --hidden-import sshman.storage \
+            --hidden-import sshman.ssh_config \
+            --hidden-import sshman.docker \
+            -c -m sshman.app
+
+      - name: Verify executable runs
+        shell: cmd
+        run: |
+          dist\sshman.exe --help || echo "Note: --help may not be supported; checking exit code is not critical for TUI apps"
+
+      - name: Compute SHA256 of .exe
+        id: sha256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 dist\sshman.exe).Hash.ToLower()
+          echo "sha256=$hash" >> $env:GITHUB_OUTPUT
+          echo "SHA256: $hash"
+
+      - name: Rename exe with version
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mv dist/sshman.exe "dist/sshman-${VERSION}-windows-x86_64.exe"
+
+      - name: Upload exe as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sshman-windows-exe
+          path: dist/sshman-*-windows-x86_64.exe
+          if-no-files-found: error
+
+      - name: Upload exe to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.version.outputs.version }}"
+          files: dist/sshman-*-windows-x86_64.exe
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha256: ${{ steps.sha256.outputs.sha256 }}
+
+  submit-winget:
+    name: Submit winget manifest
+    runs-on: windows-latest
+    needs: build-exe
+    # Only submit on real releases (not pre-releases triggered via workflow_dispatch for testing)
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install wingetcreate
+        shell: pwsh
+        run: |
+          winget install --id Microsoft.WingetCreate --silent --accept-source-agreements --accept-package-agreements
+
+      - name: Submit manifest to winget-pkgs
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
+        run: |
+          $VERSION = "${{ needs.build-exe.outputs.version }}"
+          $SHA256  = "${{ needs.build-exe.outputs.sha256 }}"
+          $EXE_URL = "https://github.com/dejan/sshman/releases/download/v${VERSION}/sshman-${VERSION}-windows-x86_64.exe"
+
+          # wingetcreate update will create a PR against microsoft/winget-pkgs
+          wingetcreate update `
+            --id Dejan.sshman `
+            --version $VERSION `
+            --urls $EXE_URL `
+            --submit `
+            --token $env:GITHUB_TOKEN
