@@ -456,31 +456,30 @@ class SSHManApp(App):
         yield Header()
 
         with TabbedContent(id="tabs"):
-            with TabPane("Connections", id="tab-connections"):
-                with Vertical(id="main-container"):
-                    with Container(id="search-container"):
-                        yield Input(
-                            placeholder="Search connections...", id="search-input"
-                        )
+            with (
+                TabPane("Connections", id="tab-connections"),
+                Vertical(id="main-container"),
+            ):
+                with Container(id="search-container"):
+                    yield Input(placeholder="Search connections...", id="search-input")
 
-                    yield DataTable(id="connections-table", cursor_type="row")
-                    yield Static(
-                        "No connections yet. Press 'a' to add or 'i' to import.",
-                        id="empty-message",
+                yield DataTable(id="connections-table", cursor_type="row")
+                yield Static(
+                    "No connections yet. Press 'a' to add or 'i' to import.",
+                    id="empty-message",
+                )
+
+            with TabPane("History", id="tab-history"), Vertical(id="history-container"):
+                with Container(id="search-container"):
+                    yield Input(
+                        placeholder="Search history...", id="history-search-input"
                     )
 
-            with TabPane("History", id="tab-history"):
-                with Vertical(id="history-container"):
-                    with Container(id="search-container"):
-                        yield Input(
-                            placeholder="Search history...", id="history-search-input"
-                        )
-
-                    yield DataTable(id="history-table", cursor_type="row")
-                    yield Static(
-                        "No connection history yet.",
-                        id="history-empty-message",
-                    )
+                yield DataTable(id="history-table", cursor_type="row")
+                yield Static(
+                    "No connection history yet.",
+                    id="history-empty-message",
+                )
 
         yield Footer()
 
