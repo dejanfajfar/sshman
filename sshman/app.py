@@ -8,9 +8,10 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.coordinate import Coordinate
-from textual.screen import ModalScreen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button,
+    Checkbox,
     DataTable,
     Footer,
     Header,
@@ -22,7 +23,9 @@ from textual.widgets import (
 )
 
 from .docker import detect_shell, get_running_containers, is_docker_available
+from .keygen import generate_key
 from .models import Connection, DockerContainer, HistoryEntry
+from .ssh_agent import ensure_key_in_agent
 from .ssh_config import parse_ssh_config
 from .storage import (
     add_connection,
@@ -34,6 +37,147 @@ from .storage import (
     save_config,
     update_connection,
 )
+
+
+class KeyGenScreen(ModalScreen[str | None]):
+    """Modal wizard for generating an Ed25519 SSH key pair.
+
+    Dismisses with the (unexpanded) key path on success, or None on cancel.
+    """
+
+    CSS = """
+    KeyGenScreen {
+        align: center middle;
+    }
+
+    #keygen-container {
+        width: 64;
+        height: auto;
+        max-height: 80%;
+        border: thick $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #keygen-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    .kg-row {
+        height: 3;
+        margin-bottom: 1;
+    }
+
+    .kg-row Label {
+        width: 18;
+        padding-top: 1;
+    }
+
+    .kg-row Input {
+        width: 1fr;
+    }
+
+    #keygen-error {
+        color: $error;
+        margin-bottom: 1;
+        display: none;
+    }
+
+    #keygen-buttons {
+        height: 3;
+        margin-top: 1;
+        align: center middle;
+    }
+
+    #keygen-buttons Button {
+        margin: 0 2;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, connection_name: str) -> None:
+        super().__init__()
+        # Sanitise the connection name for use in a filename
+        safe_name = (
+            "".join(
+                c if c.isalnum() or c in "-_" else "_" for c in connection_name
+            ).strip("_")
+            or "key"
+        )
+        self._suggested_path = f"~/.ssh/sshman_{safe_name}"
+
+    def compose(self) -> ComposeResult:
+        with Container(id="keygen-container"):
+            yield Label("Generate SSH Key", id="keygen-title")
+
+            with Horizontal(classes="kg-row"):
+                yield Label("Key path:")
+                yield Input(
+                    value=self._suggested_path,
+                    placeholder="~/.ssh/sshman_myserver",
+                    id="input-keypath",
+                )
+
+            with Horizontal(classes="kg-row"):
+                yield Label("Passphrase:")
+                yield Input(
+                    placeholder="Leave empty for no passphrase",
+                    password=True,
+                    id="input-passphrase",
+                )
+
+            with Horizontal(classes="kg-row"):
+                yield Label("Confirm passphrase:")
+                yield Input(
+                    placeholder="Repeat passphrase",
+                    password=True,
+                    id="input-passphrase2",
+                )
+
+            yield Label("", id="keygen-error")
+
+            with Horizontal(id="keygen-buttons"):
+                yield Button("Generate", variant="primary", id="btn-generate")
+                yield Button("Cancel", variant="default", id="btn-cancel-keygen")
+
+    def on_mount(self) -> None:
+        self.query_one("#input-keypath", Input).focus()
+
+    def _show_error(self, message: str) -> None:
+        err = self.query_one("#keygen-error", Label)
+        err.update(message)
+        err.display = True
+
+    @on(Button.Pressed, "#btn-generate")
+    def do_generate(self) -> None:
+        key_path = self.query_one("#input-keypath", Input).value.strip()
+        passphrase = self.query_one("#input-passphrase", Input).value
+        passphrase2 = self.query_one("#input-passphrase2", Input).value
+
+        if not key_path:
+            self._show_error("Key path is required.")
+            return
+
+        if passphrase != passphrase2:
+            self._show_error("Passphrases do not match.")
+            return
+
+        ok, error = generate_key(key_path, passphrase)
+        if ok:
+            self.dismiss(key_path)
+        else:
+            self._show_error(error)
+
+    @on(Button.Pressed, "#btn-cancel-keygen")
+    def cancel_keygen(self) -> None:
+        self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class ConfirmDeleteScreen(ModalScreen[bool]):
@@ -82,47 +226,60 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
-class ConnectionFormScreen(ModalScreen[Connection | None]):
-    """Modal screen for adding/editing a connection."""
+class ConnectionFormScreen(Screen[Connection | None]):
+    """Full-screen form for adding/editing a connection."""
 
     CSS = """
     ConnectionFormScreen {
         align: center middle;
     }
-    
+
     #form-container {
         width: 60;
         height: auto;
-        max-height: 80%;
-        border: thick $primary;
-        background: $surface;
         padding: 1 2;
     }
-    
+
     .form-row {
         height: 3;
         margin-bottom: 1;
     }
-    
+
     .form-row Label {
         width: 15;
         padding-top: 1;
     }
-    
+
     .form-row Input {
         width: 1fr;
     }
-    
+
+    #btn-generate-key {
+        width: auto;
+        min-width: 14;
+        margin-left: 1;
+    }
+
+    .form-row-check {
+        height: 3;
+        margin-bottom: 1;
+    }
+
+    .form-row-check Label {
+        width: 15;
+        padding-top: 1;
+    }
+
     #form-buttons {
         height: 3;
         margin-top: 1;
         align: center middle;
     }
-    
+
     #form-buttons Button {
         margin: 0 2;
     }
-    
+
     #form-title {
         text-style: bold;
         margin-bottom: 1;
@@ -188,6 +345,15 @@ class ConnectionFormScreen(ModalScreen[Connection | None]):
                     placeholder="e.g., ~/.ssh/id_rsa",
                     id="input-identity",
                 )
+                yield Button("Generate Key", id="btn-generate-key", variant="default")
+
+            with Horizontal(classes="form-row-check"):
+                yield Label("Auto-add key:")
+                yield Checkbox(
+                    "Add key to ssh-agent before connecting",
+                    value=conn.auto_add_key if conn else False,
+                    id="check-auto-add",
+                )
 
             with Horizontal(classes="form-row"):
                 yield Label("Description:")
@@ -195,6 +361,14 @@ class ConnectionFormScreen(ModalScreen[Connection | None]):
                     value=conn.description or "" if conn else "",
                     placeholder="e.g., Production web server",
                     id="input-description",
+                )
+
+            with Horizontal(classes="form-row"):
+                yield Label("Tags:")
+                yield Input(
+                    value=", ".join(conn.tags) if conn else "",
+                    placeholder="e.g., production, web, us-east",
+                    id="input-tags",
                 )
 
             with Horizontal(id="form-buttons"):
@@ -208,7 +382,10 @@ class ConnectionFormScreen(ModalScreen[Connection | None]):
         user = self.query_one("#input-user", Input).value.strip() or None
         port_str = self.query_one("#input-port", Input).value.strip()
         identity = self.query_one("#input-identity", Input).value.strip() or None
+        auto_add_key = self.query_one("#check-auto-add", Checkbox).value
         description = self.query_one("#input-description", Input).value.strip() or None
+        tags_raw = self.query_one("#input-tags", Input).value.strip()
+        tags = [t.strip() for t in tags_raw.split(",") if t.strip()] if tags_raw else []
 
         # Validation
         if not name or not hostname:
@@ -223,6 +400,13 @@ class ConnectionFormScreen(ModalScreen[Connection | None]):
             self.notify("Invalid port number", severity="error")
             return
 
+        if auto_add_key and not identity:
+            self.notify(
+                "Identity File is required when Auto-add key is enabled",
+                severity="error",
+            )
+            return
+
         connection = Connection(
             name=name,
             hostname=hostname,
@@ -230,12 +414,26 @@ class ConnectionFormScreen(ModalScreen[Connection | None]):
             port=port,
             identity_file=identity,
             description=description,
+            auto_add_key=auto_add_key,
+            tags=tags,
         )
         self.dismiss(connection)
 
     @on(Button.Pressed, "#btn-cancel")
     def cancel_form(self) -> None:
         self.dismiss(None)
+
+    @on(Button.Pressed, "#btn-generate-key")
+    def open_keygen(self) -> None:
+        """Open the key-generation wizard and auto-fill the result."""
+        name = self.query_one("#input-name", Input).value.strip() or "key"
+
+        def handle_keygen_result(key_path: str | None) -> None:
+            if key_path:
+                self.query_one("#input-identity", Input).value = key_path
+                self.query_one("#check-auto-add", Checkbox).value = True
+
+        self.app.push_screen(KeyGenScreen(name), handle_keygen_result)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -642,22 +840,23 @@ class SSHManApp(App):
         table.display = True
         empty_msg.display = False
 
-        table.add_columns("Name", "Target", "Type", "Info")
+        table.add_columns("Name", "Tags", "Type", "Target", "Info")
 
         # Add SSH connections
         for conn in self.filtered_connections:
             idx = self.connections.index(conn)
-            # Build info string: "description [identity_file]" or just one or "-"
             info_parts = []
             if conn.description:
                 info_parts.append(conn.description)
             if conn.identity_file:
                 info_parts.append(f"[{conn.identity_file}]")
             info_str = " ".join(info_parts) if info_parts else "-"
+            tags_str = ", ".join(conn.tags) if conn.tags else ""
             table.add_row(
                 conn.name,
-                conn.display_target(),
+                tags_str,
                 "🔐 SSH",
+                conn.display_target(),
                 info_str,
                 key=f"ssh:{idx}",
             )
@@ -666,8 +865,9 @@ class SSHManApp(App):
         for container in self.filtered_docker:
             table.add_row(
                 container.name,
-                container.image,
+                "",
                 "🐳 Docker",
+                container.image,
                 container.container_id,
                 key=f"docker:{container.container_id}",
             )
@@ -834,6 +1034,8 @@ class SSHManApp(App):
                         "name": conn.name,
                         "target": conn.display_target(),
                         "type": "ssh",
+                        "identity_file": conn.identity_file,
+                        "auto_add_key": conn.auto_add_key,
                     }
                 )
             except (ValueError, IndexError):
@@ -879,6 +1081,14 @@ def run() -> None:
         connection_name = result["name"]
         connection_target = result["target"]
         connection_type = result["type"]
+
+        # If auto_add_key is requested, ensure the key is loaded in the agent
+        # before handing off to ssh. This runs while the terminal is fully
+        # available (TUI has already exited), so any passphrase prompt works.
+        if result.get("auto_add_key") and result.get("identity_file"):
+            ok, agent_err = ensure_key_in_agent(result["identity_file"])
+            if not ok:
+                print(f"[sshman] Warning: could not add key to agent: {agent_err}")
 
         # Record start time
         start_time = datetime.now()

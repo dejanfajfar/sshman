@@ -24,6 +24,10 @@ lint-fix:
 # Auto-fix all (lint + format)
 fix: lint-fix format
 
+# Run the application
+run:
+	uv run sshman
+
 # Build pip package (wheel and sdist)
 build:
 	rm -rf dist/

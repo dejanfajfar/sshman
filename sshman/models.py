@@ -1,5 +1,6 @@
 """Data models for SSH connections."""
 
+import sys
 from datetime import datetime
 
 from pydantic import BaseModel, Field
@@ -18,6 +19,30 @@ class Connection(BaseModel):
     description: str | None = Field(
         default=None, description="Optional description or notes"
     )
+    auto_add_key: bool = Field(
+        default=False,
+        description="Automatically add identity_file to ssh-agent before connecting",
+    )
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Tags for grouping related connections",
+    )
+
+    def ssh_add_command(self) -> list[str] | None:
+        """Build the ssh-add command to load the identity key into the agent.
+
+        Returns None if auto_add_key is False or no identity_file is set.
+        On macOS, --apple-use-keychain is included so the passphrase is stored
+        in the macOS Keychain and survives reboots.
+        """
+        if not self.auto_add_key or not self.identity_file:
+            return None
+
+        cmd = ["ssh-add"]
+        if sys.platform == "darwin":
+            cmd.append("--apple-use-keychain")
+        cmd.append(self.identity_file)
+        return cmd
 
     def ssh_command(self) -> list[str]:
         """Build the SSH command arguments for this connection."""
