@@ -840,7 +840,7 @@ class SSHManApp(App):
         table.display = True
         empty_msg.display = False
 
-        table.add_columns("Name", "Tags", "Type", "Target", "Info")
+        table.add_columns("", "Name", "Tags", "Target", "Info")
 
         # Add SSH connections
         for conn in self.filtered_connections:
@@ -851,11 +851,12 @@ class SSHManApp(App):
             if conn.identity_file:
                 info_parts.append(f"[{conn.identity_file}]")
             info_str = " ".join(info_parts) if info_parts else "-"
-            tags_str = ", ".join(conn.tags) if conn.tags else ""
+            tags_str = ", ".join(sorted(conn.tags)) if conn.tags else ""
+            type_str = "🔐 🔑" if conn.identity_file else "🔐"
             table.add_row(
+                type_str,
                 conn.name,
                 tags_str,
-                "🔐 SSH",
                 conn.display_target(),
                 info_str,
                 key=f"ssh:{idx}",
@@ -864,9 +865,9 @@ class SSHManApp(App):
         # Add Docker containers
         for container in self.filtered_docker:
             table.add_row(
+                "🐳",
                 container.name,
                 "",
-                "🐳 Docker",
                 container.image,
                 container.container_id,
                 key=f"docker:{container.container_id}",
